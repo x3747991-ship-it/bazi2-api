@@ -5,35 +5,53 @@ import pandas as pd
 from datetime import datetime
 import math
 
+# --- 【架构优化】全局变量定义 ---
+# We define these as global variables to load and process them only ONCE when the app starts.
 project_path = os.path.dirname(os.path.abspath(__file__))
 app = Flask(__name__)
 app.config['JSON_AS_ASCII'] = True
 
+# --- 【架构优化】数据一次性加载 ---
+# This block runs only when the application starts, not on every request.
+# This is the key to solving the memory overflow issue.
+try:
+    csv_path = os.path.join(project_path, 'data.csv')
+    # Load the entire CSV into a global DataFrame at startup.
+    BAZI_DF = pd.read_csv(csv_path, encoding='gbk')
+    # Pre-process the date column once, saving computation time on each request.
+    BAZI_DF['日期'] = pd.to_datetime(BAZI_DF['日期'])
+    STARTUP_ERROR = None
+except Exception as e:
+    BAZI_DF = None
+    STARTUP_ERROR = e
+
+# --- GLOBAL CONSTANTS ---
 TIAN_GAN = ["甲", "乙", "丙", "丁", "戊", "己", "庚", "辛", "壬", "癸"]
 DI_ZHI = ["子", "丑", "寅", "卯", "辰", "巳", "午", "未", "申", "酉", "戌", "亥"]
 JIAZI_CYCLE = [TIAN_GAN[i % 10] + DI_ZHI[i % 12] for i in range(60)]
 JIE_QI = ['立春', '惊蛰', '清明', '立夏', '芒种', '小暑', '立秋', '白露', '寒露', '立冬', '大雪', '小寒']
 
-# --- 【关键新增】Health Check Endpoint ---
-# This route handles the health checks from the platform's gateway.
-# It simply returns a 200 OK to prove the application is alive.
+
+# --- Health Check Endpoint ---
 @app.route('/', methods=['GET'])
 def health_check():
+    # If the data failed to load at startup, report an error here.
+    if BAZI_DF is None:
+        return f"Application started, but failed to load data: {STARTUP_ERROR}", 500
     return "OK", 200
 
 # --- Core Calculation Function ---
 def get_bazi_details(birth_time_str, gender):
+    # 【架构优化】Use the globally loaded DataFrame instead of reading the file again.
+    df = BAZI_DF
+
     try:
         birth_dt = datetime.strptime(birth_time_str, '%Y-%m-%d %H:%M')
     except ValueError:
         raise ValueError("日期时间格式错误，请使用 'YYYY-MM-DD HH:MM' 格式。")
-    try:
-        csv_path = os.path.join(project_path, 'data.csv')
-        df = pd.read_csv(csv_path, encoding='gbk')
-    except Exception as e:
-        raise Exception(f"读取CSV文件时出错: {e}")
+    
+    # ... (The rest of the calculation logic is identical, but now much faster and memory-efficient)
     DATE_COLUMN, SOLAR_TERM_COLUMN, GAN_ZHI_COLUMN = '日期', '节气', '干支'
-    df[DATE_COLUMN] = pd.to_datetime(df[DATE_COLUMN])
     lichun_this_year = df[(df[DATE_COLUMN].dt.year == birth_dt.year) & (df[SOLAR_TERM_COLUMN] == '立春')]
     year_for_bazi = birth_dt.year
     if not lichun_this_year.empty and birth_dt < lichun_this_year.iloc[0][DATE_COLUMN]:
@@ -78,6 +96,10 @@ def get_bazi_details(birth_time_str, gender):
 # --- Main API Endpoint ---
 @app.route('/bazi', methods=['POST'])
 def bazi_handler():
+    # Check if data loading failed at startup
+    if BAZI_DF is None:
+        return jsonify({"error": f"Application failed to start: Cannot load data. Details: {STARTUP_ERROR}"}), 500
+    
     data = request.get_json()
     if not data or 'birth_time' not in data or 'gender' not in data:
         return jsonify({"error": "请求体必须是JSON，且包含 'birth_time' 和 'gender' 字段。"}), 400
@@ -86,3 +108,4 @@ def bazi_handler():
         return jsonify(bazi_info)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
