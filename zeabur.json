@@ -1,0 +1,22 @@
+{
+    "build": {
+        "dockerfile": "Dockerfile"
+    },
+    "deploy": {
+        "startCommand": "gunicorn -c gunicorn.conf.py app:app",
+        "healthCheck": {
+            "httpGet": {
+                "path": "/health",
+                "port": 8000
+            },
+            "initialDelaySeconds": 30,
+            "periodSeconds": 10,
+            "timeoutSeconds": 5,
+            "failureThreshold": 3
+        }
+    },
+    "expose": {
+        "containerPort": 8000,
+        "protocol": "http"
+    }
+}
